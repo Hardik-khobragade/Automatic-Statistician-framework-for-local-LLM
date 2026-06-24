@@ -101,6 +101,21 @@ def check_code_safety(code: str) -> None:
 # Worker (runs in a fresh subprocess)
 # --------------------------------------------------------------------------- #
 
+def _fingerprint(d: Dict[str, Any]) -> str:
+    """Content-based fingerprint for a result dict. Deliberately NOT id()-based:
+    the sandbox namespace round-trips through cloudpickle between every
+    execute_python call (each runs in a fresh subprocess), and unpickling
+    always allocates a new object with a new id() -- so an id()-based
+    "already recorded" check would forget everything after one step and
+    re-capture stale leftover variables as if they were new."""
+    import hashlib
+    import json
+    try:
+        return hashlib.md5(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()
+    except Exception:
+        return repr(sorted(d.items(), key=lambda kv: kv[0]))
+
+
 def _build_fresh_namespace(df, figures_dir: str) -> Dict[str, Any]:
     import numpy as np
     import pandas as pd
@@ -117,12 +132,15 @@ def _build_fresh_namespace(df, figures_dir: str) -> Dict[str, Any]:
     from . import stats_toolkit
 
     results_registry: List[Dict[str, Any]] = []
+    recorded_fingerprints: set = set()
 
     def record_result(name: str, result: Dict[str, Any]) -> None:
         """Attach a result dict to the final report's results tables."""
         entry = {"name": name}
         entry.update(result if isinstance(result, dict) else {"value": result})
         results_registry.append(entry)
+        if isinstance(result, dict):
+            recorded_fingerprints.add(_fingerprint(result))
 
     ns: Dict[str, Any] = {
         "__builtins__": __builtins__,
@@ -132,9 +150,62 @@ def _build_fresh_namespace(df, figures_dir: str) -> Dict[str, Any]:
         "df": df,
         "record_result": record_result,
         "_RESULTS": results_registry,
+        "_RECORDED_FINGERPRINTS": recorded_fingerprints,
         "FIGURES_DIR": figures_dir,
     }
     return ns
+
+
+# Namespace keys that are part of the environment, not analysis variables --
+# never auto-scanned for "forgotten" results.
+_SEED_NAMESPACE_KEYS = {
+    "__builtins__", "pd", "np", "scipy", "stats", "sm", "smf", "plt", "sns",
+    "pg", "stats_toolkit", "df", "record_result", "_RESULTS",
+    "_RECORDED_FINGERPRINTS", "FIGURES_DIR",
+}
+
+
+def _looks_like_toolkit_result(v: Any) -> bool:
+    return isinstance(v, dict) and ("test" in v or "effect_size" in v)
+
+
+def _auto_capture_unrecorded_results(ns: Dict[str, Any], tail_value: Any) -> int:
+    """Safety net for a model that computes a stats_toolkit result but
+    forgets to call record_result(): scan top-level variables (and the
+    last expression's value) for result-shaped dicts not yet recorded
+    (by content fingerprint, not id() -- see _fingerprint's docstring for
+    why), and record them automatically so the report's Statistical
+    Results section isn't empty just because the model skipped a
+    bookkeeping call."""
+    registry = ns.get("_RESULTS")
+    fingerprints = ns.get("_RECORDED_FINGERPRINTS")
+    if registry is None or fingerprints is None:
+        return 0
+
+    candidates = []
+    seen_this_call: set = set()
+    for name, val in list(ns.items()):
+        if name in _SEED_NAMESPACE_KEYS or name.startswith("_"):
+            continue
+        if _looks_like_toolkit_result(val):
+            fp = _fingerprint(val)
+            if fp not in fingerprints and fp not in seen_this_call:
+                candidates.append((name, val, fp))
+                seen_this_call.add(fp)
+    if _looks_like_toolkit_result(tail_value):
+        fp = _fingerprint(tail_value)
+        if fp not in fingerprints and fp not in seen_this_call:
+            candidates.append(("result", tail_value, fp))
+
+    n_added = 0
+    for var_name, val, fp in candidates:
+        label = val.get("test") or val.get("effect_size") or var_name
+        entry = {"name": f"{label} (auto-captured from '{var_name}')"}
+        entry.update(val)
+        registry.append(entry)
+        fingerprints.add(fp)
+        n_added += 1
+    return n_added
 
 
 def _save_open_figures(figures_dir: str, fig_counter_start: int) -> List[str]:
@@ -165,6 +236,7 @@ def _worker(code: str, state_path: str, df_path: Optional[str], figures_dir: str
         stdout_buf = io.StringIO()
         error_text = None
         last_expr_repr = None
+        tail_value = None
 
         try:
             tree = ast.parse(code, mode="exec")
@@ -178,11 +250,18 @@ def _worker(code: str, state_path: str, df_path: Optional[str], figures_dir: str
             with contextlib.redirect_stdout(stdout_buf):
                 exec(compiled, ns)
                 if tail_repr_src is not None:
-                    val = eval(tail_repr_src, ns)
-                    if val is not None:
-                        last_expr_repr = repr(val)
+                    tail_value = eval(tail_repr_src, ns)
+                    if tail_value is not None:
+                        last_expr_repr = repr(tail_value)
         except Exception:
             error_text = traceback.format_exc(limit=6)
+
+        n_auto_captured = 0
+        if error_text is None:
+            try:
+                n_auto_captured = _auto_capture_unrecorded_results(ns, tail_value)
+            except Exception:
+                pass
 
         fig_paths = []
         try:
@@ -214,6 +293,7 @@ def _worker(code: str, state_path: str, df_path: Optional[str], figures_dir: str
             "last_expr_repr": last_expr_repr,
             "figures": fig_paths,
             "n_recorded_results": n_results,
+            "n_auto_captured": n_auto_captured,
         })
     except Exception:
         queue.put({
@@ -223,6 +303,7 @@ def _worker(code: str, state_path: str, df_path: Optional[str], figures_dir: str
             "last_expr_repr": None,
             "figures": [],
             "n_recorded_results": 0,
+            "n_auto_captured": 0,
         })
 
 
@@ -238,6 +319,7 @@ class ExecutionResult:
     last_expr_repr: Optional[str] = None
     figures: List[str] = field(default_factory=list)
     n_recorded_results: int = 0
+    n_auto_captured: int = 0
     rejected_unsafe: Optional[str] = None
     timed_out: bool = False
 
@@ -308,6 +390,7 @@ class CodeSandbox:
             success=out["success"], stdout=out["stdout"], error=out["error"],
             last_expr_repr=out["last_expr_repr"], figures=out["figures"],
             n_recorded_results=out["n_recorded_results"],
+            n_auto_captured=out.get("n_auto_captured", 0),
         )
         self._fig_counter += len(result.figures)
         return result

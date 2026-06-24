@@ -6,4 +6,4 @@ restricted code sandbox to perform statistical analysis, and assembles a
 Word (.docx) report with embedded charts and tables.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.0.3"

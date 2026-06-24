@@ -20,6 +20,7 @@ import os
 import sys
 import time
 
+from autostat import __version__
 from autostat.config import LLMConfig, AgentConfig, RunPaths
 from autostat.data_profiling import load_data, profile_data, profile_to_prompt_string, save_profile
 from autostat.llm_client import LLMClient, LLMConnectionError
@@ -48,6 +49,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    print(f"Automatic Statistician v{__version__}")
 
     if not os.path.exists(args.data):
         print(f"Error: data file not found: {args.data}", file=sys.stderr)
@@ -67,6 +69,21 @@ def main():
         agent_cfg.max_iterations = args.max_iterations
     if args.sandbox_timeout:
         agent_cfg.sandbox_timeout_sec = args.sandbox_timeout
+
+    # Catches a partial/mismatched install early (e.g. a zip re-extracted on top of an
+    # old folder that skipped some files) with a clear message, instead of an
+    # AttributeError mid-run several minutes into a real analysis.
+    expected_attrs = {"LLMConfig": (llm_cfg, ["disable_thinking", "stop"]),
+                       "AgentConfig": (agent_cfg, ["max_consecutive_parse_failures", "max_repeated_actions"])}
+    missing = [f"{cls}.{attr}" for cls, (obj, attrs) in expected_attrs.items()
+               for attr in attrs if not hasattr(obj, attr)]
+    if missing:
+        print(f"Error: your autostat/ package looks out of date or partially overwritten -- "
+              f"missing: {', '.join(missing)}.", file=sys.stderr)
+        print("Delete the whole project folder and re-extract the zip fresh (don't extract on "
+              "top of the old folder -- on Windows, Explorer can silently skip files on "
+              "'file already exists' prompts).", file=sys.stderr)
+        sys.exit(1)
 
     print(f"[1/5] Loading and profiling '{args.data}' ...")
     df = load_data(args.data)
@@ -111,6 +128,8 @@ def main():
     print(f"      Done in {elapsed:.1f}s -- {agent_result.n_iterations} steps, "
           f"{len(agent_result.report_sections)} report section(s), "
           f"finished_cleanly={agent_result.finished_cleanly}")
+    if agent_result.aborted_reason:
+        print(f"      ABORTED EARLY: {agent_result.aborted_reason}")
 
     with open(paths.transcript_path, "w") as f:
         f.write(f"# Transcript -- {args.data}\nTask: {args.task}\n")
@@ -118,6 +137,29 @@ def main():
         f.write(f"\n\nFinal message: {agent_result.finish_message}\n")
 
     recorded_results = sandbox.get_recorded_results()
+
+    if not recorded_results or not agent_result.report_sections:
+        print()
+        if not recorded_results and not agent_result.report_sections:
+            print("WARNING: zero statistical results AND zero report sections were produced.")
+        elif not recorded_results:
+            print("WARNING: zero statistical results were recorded (but some report sections exist).")
+        else:
+            print("WARNING: zero report sections were written (but some statistical results exist).")
+        print(f"Full detail in {paths.transcript_path}. Last few raw model replies:")
+        for line in transcript_lines[-12:]:
+            print(f"  {line}")
+        print("\nCommon causes:")
+        print("  - The model emitted <think> reasoning that got cut off before any real answer")
+        print("    (look for an unclosed <think> tag above). Try raising AUTOSTAT_LLM_MAX_TOKENS,")
+        print("    or run setup_check.py to confirm thinking is actually off for your model/server.")
+        print("  - The model ran analyses via execute_python but never called record_result() and")
+        print("    its output didn't look like a stats_toolkit result dict, so the auto-capture")
+        print("    safety net had nothing to grab either -- check whether it's calling")
+        print("    stats_toolkit.* functions at all, vs. writing its own from-scratch code.")
+        print("  - The model isn't following the Thought/Action/Action Input format at all --")
+        print("    re-run with --verbose to watch it live, or try a different/larger model.")
+        print()
 
     print("[4/5] Validating recorded results ...")
     warnings_list = validation.validate_all(recorded_results)

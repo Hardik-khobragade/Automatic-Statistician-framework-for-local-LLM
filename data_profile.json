@@ -1,0 +1,321 @@
+{
+  "n_rows": 178,
+  "n_cols": 14,
+  "columns_profiled": 14,
+  "columns_truncated": false,
+  "total_missing_cells": 0,
+  "duplicate_rows": 0,
+  "columns": {
+    "alcohol": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 126,
+      "mean": 13.0006,
+      "std": 0.8118,
+      "min": 11.03,
+      "p25": 12.3625,
+      "median": 13.05,
+      "p75": 13.6775,
+      "max": 14.83,
+      "skewness": -0.051,
+      "kurtosis": -0.8623,
+      "n_outliers_iqr": 0
+    },
+    "malic_acid": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 133,
+      "mean": 2.3363,
+      "std": 1.1171,
+      "min": 0.74,
+      "p25": 1.6025,
+      "median": 1.865,
+      "p75": 3.0825,
+      "max": 5.8,
+      "skewness": 1.0309,
+      "kurtosis": 0.2573,
+      "n_outliers_iqr": 3
+    },
+    "ash": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 79,
+      "mean": 2.3665,
+      "std": 0.2743,
+      "min": 1.36,
+      "p25": 2.21,
+      "median": 2.36,
+      "p75": 2.5575,
+      "max": 3.23,
+      "skewness": -0.1752,
+      "kurtosis": 1.0786,
+      "n_outliers_iqr": 3
+    },
+    "alcalinity_of_ash": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 63,
+      "mean": 19.4949,
+      "std": 3.3396,
+      "min": 10.6,
+      "p25": 17.2,
+      "median": 19.5,
+      "p75": 21.5,
+      "max": 30.0,
+      "skewness": 0.2112,
+      "kurtosis": 0.4408,
+      "n_outliers_iqr": 4
+    },
+    "magnesium": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 53,
+      "mean": 99.7416,
+      "std": 14.2825,
+      "min": 70.0,
+      "p25": 88.0,
+      "median": 98.0,
+      "p75": 107.0,
+      "max": 162.0,
+      "skewness": 1.0889,
+      "kurtosis": 2.0128,
+      "n_outliers_iqr": 4
+    },
+    "total_phenols": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 97,
+      "mean": 2.2951,
+      "std": 0.6259,
+      "min": 0.98,
+      "p25": 1.7425,
+      "median": 2.355,
+      "p75": 2.8,
+      "max": 3.88,
+      "skewness": 0.0859,
+      "kurtosis": -0.8459,
+      "n_outliers_iqr": 0
+    },
+    "flavanoids": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 132,
+      "mean": 2.0293,
+      "std": 0.9989,
+      "min": 0.34,
+      "p25": 1.205,
+      "median": 2.135,
+      "p75": 2.875,
+      "max": 5.08,
+      "skewness": 0.0251,
+      "kurtosis": -0.8894,
+      "n_outliers_iqr": 0
+    },
+    "nonflavanoid_phenols": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 39,
+      "mean": 0.3619,
+      "std": 0.1245,
+      "min": 0.13,
+      "p25": 0.27,
+      "median": 0.34,
+      "p75": 0.4375,
+      "max": 0.66,
+      "skewness": 0.4463,
+      "kurtosis": -0.653,
+      "n_outliers_iqr": 0
+    },
+    "proanthocyanins": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 101,
+      "mean": 1.5909,
+      "std": 0.5724,
+      "min": 0.41,
+      "p25": 1.25,
+      "median": 1.555,
+      "p75": 1.95,
+      "max": 3.58,
+      "skewness": 0.5128,
+      "kurtosis": 0.5057,
+      "n_outliers_iqr": 2
+    },
+    "color_intensity": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 132,
+      "mean": 5.0581,
+      "std": 2.3183,
+      "min": 1.28,
+      "p25": 3.22,
+      "median": 4.69,
+      "p75": 6.2,
+      "max": 13.0,
+      "skewness": 0.8612,
+      "kurtosis": 0.3374,
+      "n_outliers_iqr": 4
+    },
+    "hue": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 78,
+      "mean": 0.9574,
+      "std": 0.2286,
+      "min": 0.48,
+      "p25": 0.7825,
+      "median": 0.965,
+      "p75": 1.12,
+      "max": 1.71,
+      "skewness": 0.0209,
+      "kurtosis": -0.368,
+      "n_outliers_iqr": 1
+    },
+    "od280/od315_of_diluted_wines": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 122,
+      "mean": 2.6117,
+      "std": 0.71,
+      "min": 1.27,
+      "p25": 1.9375,
+      "median": 2.78,
+      "p75": 3.17,
+      "max": 4.0,
+      "skewness": -0.3047,
+      "kurtosis": -1.0897,
+      "n_outliers_iqr": 0
+    },
+    "proline": {
+      "detected_type": "numeric",
+      "pandas_dtype": "float64",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 121,
+      "mean": 746.8933,
+      "std": 314.9075,
+      "min": 278.0,
+      "p25": 500.5,
+      "median": 673.5,
+      "p75": 985.0,
+      "max": 1680.0,
+      "skewness": 0.7613,
+      "kurtosis": -0.275,
+      "n_outliers_iqr": 0
+    },
+    "target": {
+      "detected_type": "categorical",
+      "pandas_dtype": "object",
+      "n_missing": 0,
+      "pct_missing": 0.0,
+      "n_unique": 3,
+      "top_values": {
+        "class_1": 71,
+        "class_0": 59,
+        "class_2": 48
+      },
+      "mode": "class_1"
+    }
+  },
+  "top_correlations": [
+    {
+      "col_a": "total_phenols",
+      "col_b": "flavanoids",
+      "pearson_r": 0.8646
+    },
+    {
+      "col_a": "flavanoids",
+      "col_b": "od280/od315_of_diluted_wines",
+      "pearson_r": 0.7872
+    },
+    {
+      "col_a": "total_phenols",
+      "col_b": "od280/od315_of_diluted_wines",
+      "pearson_r": 0.6999
+    },
+    {
+      "col_a": "flavanoids",
+      "col_b": "proanthocyanins",
+      "pearson_r": 0.6527
+    },
+    {
+      "col_a": "alcohol",
+      "col_b": "proline",
+      "pearson_r": 0.6437
+    },
+    {
+      "col_a": "total_phenols",
+      "col_b": "proanthocyanins",
+      "pearson_r": 0.6124
+    },
+    {
+      "col_a": "hue",
+      "col_b": "od280/od315_of_diluted_wines",
+      "pearson_r": 0.5655
+    },
+    {
+      "col_a": "malic_acid",
+      "col_b": "hue",
+      "pearson_r": -0.5613
+    },
+    {
+      "col_a": "alcohol",
+      "col_b": "color_intensity",
+      "pearson_r": 0.5464
+    },
+    {
+      "col_a": "flavanoids",
+      "col_b": "hue",
+      "pearson_r": 0.5435
+    },
+    {
+      "col_a": "flavanoids",
+      "col_b": "nonflavanoid_phenols",
+      "pearson_r": -0.5379
+    },
+    {
+      "col_a": "color_intensity",
+      "col_b": "hue",
+      "pearson_r": -0.5218
+    },
+    {
+      "col_a": "proanthocyanins",
+      "col_b": "od280/od315_of_diluted_wines",
+      "pearson_r": 0.5191
+    },
+    {
+      "col_a": "nonflavanoid_phenols",
+      "col_b": "od280/od315_of_diluted_wines",
+      "pearson_r": -0.5033
+    },
+    {
+      "col_a": "total_phenols",
+      "col_b": "proline",
+      "pearson_r": 0.4981
+    }
+  ]
+}

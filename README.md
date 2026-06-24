@@ -147,6 +147,59 @@ python main.py --data x.csv --task "..." --ground-truth expected.json
 The report gets a "Comparison with Ground Truth" section showing observed
 vs. expected and whether each is within a 5% tolerance.
 
+## Troubleshooting: "the report has no results / no findings"
+
+By far the most common cause: **Qwen3 (and other recent models) default to
+a hybrid "thinking" mode** that wraps reasoning in `<think>...</think>`
+before the real answer. If that goes unhandled, every ReAct step fails to
+parse, the agent records nothing, and you get an empty report. This project
+already defends against it in three layers:
+
+1. `main.py` passes `think: false` to the server's chat-completions call
+   (Ollama's native toggle for this).
+2. The system prompt also explicitly asks the model not to use `<think>`.
+3. `<think>...</think>` blocks are stripped out of every reply before
+   parsing, regardless of whether (1) or (2) worked.
+
+If you still get an empty report:
+
+- Run `python setup_check.py` -- it sends one test prompt through the exact
+  same parsing path as a real run and tells you directly whether thinking
+  leaked through, whether a reply got cut off mid-`<think>` (raise
+  `AUTOSTAT_LLM_MAX_TOKENS`), or whether the model isn't following the
+  format at all.
+- Check `transcript.md` from the failed run -- it has the raw model output
+  for every step, including any thinking content.
+- A run that aborts after a handful of steps with an explicit
+  `aborted_reason` printed to the console (rather than running all the way
+  to `--max-iterations`) means the model never produced a single parseable
+  action -- raising `--max-iterations` will not help; the format itself is
+  the problem.
+- Make sure your Ollama version is recent enough to support the `think`
+  request parameter; older versions silently ignore it -- and unlike the
+  `<think>...</think>` text-tag case, that's *not* harmless: if `think:false`
+  is ignored, the model thinks at full length on every turn, and if it
+  burns through the entire `max_tokens` budget before ever producing a real
+  answer, `message.content` comes back **completely empty** (no `<think>`
+  text to even strip -- there's nothing there). You'll see this directly:
+  `main.py`/`setup_check.py` now print a line like
+  `[llm_client] empty content returned -- finish_reason=length,
+  completion_tokens=1536/1536, think_param_sent=True, ...` whenever this
+  happens, which tells you the budget was fully consumed by reasoning with
+  zero tokens left for the actual answer. If you see that:
+  1. Run `ollama --version` and update Ollama (`winget upgrade Ollama.Ollama`
+     on Windows, or redownload from ollama.com) -- `think` support requires
+     a fairly recent release.
+  2. Raise `AUTOSTAT_LLM_MAX_TOKENS` (env var) well above the default 1536
+     as a stopgap -- this costs more time per step on a 4GB GPU but at least
+     gives the model room to finish thinking and still answer.
+  3. If neither helps, the most reliable fix on constrained hardware is
+     switching away from a forced-reasoning model entirely -- try
+     `qwen2.5:3b-instruct` or `llama3.2:3b` instead of `qwen3:4b`. Plain
+     instruct models (no built-in chain-of-thought) tend to follow a strict
+     ReAct template far more reliably *and* run faster, since there's no
+     reasoning overhead to suppress in the first place.
+
 ## Extending the toolkit
 
 Add a new wrapper function to `autostat/stats_toolkit.py` (return a plain

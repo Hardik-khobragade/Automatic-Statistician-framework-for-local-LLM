@@ -34,13 +34,19 @@ class LLMConfig:
     api_key: str = os.environ.get("AUTOSTAT_LLM_API_KEY", "ollama")  # unused by Ollama, required by client
     model: str = os.environ.get("AUTOSTAT_LLM_MODEL", "qwen3:4b")
     temperature: float = _env_float("AUTOSTAT_LLM_TEMPERATURE", 0.2)
-    max_tokens: int = _env_int("AUTOSTAT_LLM_MAX_TOKENS", 700)
+    max_tokens: int = _env_int("AUTOSTAT_LLM_MAX_TOKENS", 1536)
     # Keep well under the model's loaded context. A 4GB GPU typically can't
     # hold a huge KV cache alongside a 4B model's weights -- 4096-8192 is a
     # safe range. Set the matching num_ctx in your Ollama Modelfile/run flags.
     context_window: int = _env_int("AUTOSTAT_LLM_CONTEXT_WINDOW", 4096)
     request_timeout: int = _env_int("AUTOSTAT_LLM_TIMEOUT", 180)
     stop: list = field(default_factory=lambda: ["\nObservation:", "Observation:"])
+    # Qwen3 (and other recent hybrid-reasoning models) think by default,
+    # wrapping replies in <think>...</think> before the real answer. That
+    # breaks strict Thought/Action/Action Input parsing and burns through a
+    # small context window fast. Off by default for this agent loop, which
+    # needs short, strictly-formatted turns. See README troubleshooting.
+    disable_thinking: bool = os.environ.get("AUTOSTAT_DISABLE_THINKING", "1") != "0"
 
 
 @dataclass
@@ -48,6 +54,7 @@ class AgentConfig:
     max_iterations: int = _env_int("AUTOSTAT_MAX_ITERATIONS", 20)
     sandbox_timeout_sec: int = _env_int("AUTOSTAT_SANDBOX_TIMEOUT", 60)
     max_repeated_actions: int = 3          # loop-detection threshold
+    max_consecutive_parse_failures: int = 5  # abort early instead of burning all iterations silently
     max_observation_chars: int = 1800       # truncate long stdout shown back to the LLM
     figures_dirname: str = "figures"
     workdir_dirname: str = "_workdir"

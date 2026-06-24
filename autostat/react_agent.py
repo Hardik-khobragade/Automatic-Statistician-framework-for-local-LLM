@@ -53,7 +53,9 @@ report's results tables, wrap the call:
     print(res)
 """
 
-SYSTEM_PROMPT_TEMPLATE = """You are an automatic statistician analyzing a dataset for a user.
+SYSTEM_PROMPT_TEMPLATE = """/no_think
+You are an automatic statistician analyzing a dataset for a user.
+Do not use a <think> block or any internal reasoning before your answer -- respond immediately in the exact format below, with no other text.
 Work step by step using this exact loop. Output ONLY one Thought/Action/Action Input block per turn, then stop.
 
 Format (follow exactly):
@@ -79,6 +81,7 @@ Dataset profile:
 Task: {task}
 
 Guidelines:
+- You MUST run at least one stats_toolkit function and call record_result(name, result) on it, and call report at least once, before you are allowed to call finish. Calling finish before doing any analysis will be rejected.
 - Check relevant statistical assumptions (normality, equal variance) before choosing a parametric test; the toolkit functions already do this for you and report it in the result dict.
 - Prefer the toolkit functions over hand-written statistics code.
 - Call `report` at least 2-3 times over the course of the analysis (e.g. after descriptives, after each major test) rather than only once at the very end.
@@ -130,22 +133,54 @@ class AgentRunResult:
     n_iterations: int = 0
     finished_cleanly: bool = False
     finish_message: str = ""
+    aborted_reason: Optional[str] = None
 
 
 _ACTION_RE = re.compile(
-    r"Thought:\s*(?P<thought>.*?)\s*Action:\s*(?P<action>\w+)\s*Action Input:\s*(?P<input>.*)",
-    re.DOTALL,
+    r"Thought:\s*(?P<thought>.*?)\s*\**\s*Action:\s*\**\s*(?P<action>[A-Za-z_]+)\**\s*"
+    r"\**\s*Action Input:\s*\**\s*(?P<input>.*)",
+    re.DOTALL | re.IGNORECASE,
 )
+
+# Fallback when the model drops the "Thought:" line entirely (common once a
+# few turns deep) or drifts on label casing -- only Action/Action Input required.
+_ACTION_RE_LENIENT = re.compile(
+    r"\**\s*Action:\s*\**\s*(?P<action>[A-Za-z_]+)\**\s*"
+    r"\**\s*Action Input:\s*\**\s*(?P<input>.*)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+
+
+def strip_thinking(text: str) -> Tuple[str, bool]:
+    """Remove <think>...</think> reasoning blocks some models (Qwen3,
+    DeepSeek-R1, etc.) emit even when asked not to. Returns
+    (cleaned_text, was_truncated_mid_thought). The latter is True when an
+    opening <think> tag has no matching close -- i.e. the reply was cut off
+    by max_tokens while still reasoning, before producing any real answer."""
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    truncated = bool(_THINK_OPEN_RE.search(cleaned))
+    if truncated:
+        cleaned = _THINK_OPEN_RE.split(cleaned)[0]
+    return cleaned.strip(), truncated
 
 
 def parse_action(text: str) -> Optional[Tuple[str, str, str]]:
     """Parse a Thought/Action/Action Input block. Returns (thought, action, input) or None."""
     m = _ACTION_RE.search(text)
-    if not m:
-        return None
-    thought = m.group("thought").strip()
-    action = m.group("action").strip().lower()
-    action_input = m.group("input").strip()
+    if m:
+        thought = m.group("thought").strip()
+        action = m.group("action").strip().lower()
+        action_input = m.group("input").strip()
+    else:
+        m = _ACTION_RE_LENIENT.search(text)
+        if not m:
+            return None
+        thought = ""
+        action = m.group("action").strip().lower()
+        action_input = m.group("input").strip()
     # If the model kept going and hallucinated its own "Observation:", cut it off.
     action_input = re.split(r"\n\s*Observation:", action_input)[0].strip()
     # Strip markdown code fences if the model wrapped code in them.
@@ -208,37 +243,73 @@ def run_agent(task: str, df: pd.DataFrame, data_profile_str: str, llm_client,
         task=task,
     ) + "\n" + EXAMPLE_TRANSCRIPT
 
-    messages = [{"role": "system", "content": system_prompt},
-                {"role": "user", "content": "Begin the analysis."}]
+    # Qwen3's /no_think toggle is documented as a per-turn directive -- some
+    # chat templates only honor it on the most recent user message, not just
+    # once at the start of the conversation. Repeat it on every turn rather
+    # than assuming it "sticks" for the whole session.
+    disable_thinking = getattr(getattr(llm_client, "cfg", None), "disable_thinking", True)
+
+    def user_msg(text: str) -> Dict[str, str]:
+        return {"role": "user", "content": f"{text} /no_think" if disable_thinking else text}
+
+    messages = [{"role": "system", "content": system_prompt}, user_msg("Begin the analysis.")]
 
     result = AgentRunResult()
     recent_actions: List[Tuple[str, str]] = []
     figures_since_last_report: List[str] = []
+    consecutive_parse_failures = 0
+    finish_nudge_count = 0
 
     for i in range(agent_cfg.max_iterations):
         result.n_iterations = i + 1
         raw = llm_client.chat(messages)
-        parsed = parse_action(raw)
+        cleaned, truncated_thinking = strip_thinking(raw)
+        parsed = parse_action(cleaned)
 
         if parsed is None:
-            obs = ("Error: could not parse your response. You must reply with exactly:\n"
-                   "Thought: ...\nAction: <action_name>\nAction Input: ...")
+            consecutive_parse_failures += 1
+            if truncated_thinking:
+                obs = ("Error: your reply was cut off while still inside a <think> block, before any "
+                       "Thought/Action/Action Input was produced. Do not use <think> at all -- answer "
+                       "immediately in the required format.")
+            elif not raw.strip():
+                obs = ("Error: you returned a completely empty response (likely your entire token "
+                       "budget was spent on internal reasoning with none left for a real answer). "
+                       "Answer immediately with Thought/Action/Action Input, no reasoning first.")
+            else:
+                obs = ("Error: could not parse your response. You must reply with exactly:\n"
+                       "Thought: ...\nAction: <action_name>\nAction Input: ...\n(no other text, no <think> block)")
             result.transcript.append({"role": "assistant", "content": raw})
             result.transcript.append({"role": "observation", "content": obs})
-            messages.append({"role": "assistant", "content": raw})
-            messages.append({"role": "user", "content": f"Observation: {obs}"})
+            # Keep history lean: store the cleaned (post-thinking-strip) text, not the raw
+            # reasoning dump, so a 4096-token context window doesn't fill up after a few turns.
+            messages.append({"role": "assistant", "content": cleaned or "(empty/unparseable reply)"})
+            messages.append(user_msg(f"Observation: {obs}"))
             if on_step:
                 on_step(i, raw, obs)
+            if consecutive_parse_failures >= getattr(agent_cfg, "max_consecutive_parse_failures", 5):
+                result.aborted_reason = (
+                    f"Aborted after {consecutive_parse_failures} consecutive unparseable replies. "
+                    f"This usually means the model is emitting <think> reasoning that doesn't fit in "
+                    f"max_tokens, or isn't following the required output format at all. Raising "
+                    f"--max-iterations will NOT fix this -- check transcript.md for the raw output, and "
+                    f"see the README troubleshooting section (try AUTOSTAT_LLM_MAX_TOKENS, confirm "
+                    f"thinking mode is actually disabled for your model/server, or use a smaller/"
+                    f"non-thinking model)."
+                )
+                result.finish_message = result.aborted_reason
+                break
             continue
 
+        consecutive_parse_failures = 0
         thought, action, action_input = parsed
         result.transcript.append({"role": "assistant",
                                    "content": f"Thought: {thought}\nAction: {action}\nAction Input: {action_input}"})
-        messages.append({"role": "assistant", "content": raw})
+        messages.append({"role": "assistant", "content": cleaned})
 
         if action not in VALID_ACTIONS:
             obs = f"Error: unknown action '{action}'. Valid actions: {sorted(VALID_ACTIONS)}"
-            messages.append({"role": "user", "content": f"Observation: {obs}"})
+            messages.append(user_msg(f"Observation: {obs}"))
             result.transcript.append({"role": "observation", "content": obs})
             if on_step:
                 on_step(i, raw, obs)
@@ -250,7 +321,7 @@ def run_agent(task: str, df: pd.DataFrame, data_profile_str: str, llm_client,
         if recent_actions.count(sig) >= agent_cfg.max_repeated_actions:
             obs = ("Error: you have repeated this exact action several times with no new "
                    "result. Try a different analysis, or call finish if you are done.")
-            messages.append({"role": "user", "content": f"Observation: {obs}"})
+            messages.append(user_msg(f"Observation: {obs}"))
             result.transcript.append({"role": "observation", "content": obs})
             if on_step:
                 on_step(i, raw, obs)
@@ -258,8 +329,27 @@ def run_agent(task: str, df: pd.DataFrame, data_profile_str: str, llm_client,
 
         # --- dispatch -------------------------------------------------------
         if action == "finish":
+            has_results = len(sandbox.get_recorded_results()) > 0
+            has_sections = len(result.report_sections) > 0
+            if not has_results and not has_sections and finish_nudge_count < 2:
+                finish_nudge_count += 1
+                obs = ("Error: you called finish but haven't run any statistical test (no "
+                       "record_result calls happened) or written any report section yet. Run at "
+                       "least one stats_toolkit function and call report with your findings before "
+                       "finishing.")
+                messages.append(user_msg(f"Observation: {obs}"))
+                result.transcript.append({"role": "observation", "content": obs})
+                if on_step:
+                    on_step(i, raw, obs)
+                continue
             result.finished_cleanly = True
             result.finish_message = action_input
+            if not has_results and not has_sections:
+                result.finish_message += (
+                    " [warning: finished with zero recorded results and zero report sections "
+                    "despite being nudged -- the model may be unable or unwilling to use the "
+                    "stats_toolkit/report actions on this dataset/task. See transcript.md.]"
+                )
             if on_step:
                 on_step(i, raw, "(analysis finished)")
             break
@@ -278,6 +368,11 @@ def run_agent(task: str, df: pd.DataFrame, data_profile_str: str, llm_client,
                 if exec_res.figures:
                     pieces.append(f"[saved {len(exec_res.figures)} figure(s)]")
                     figures_since_last_report.extend(exec_res.figures)
+                if exec_res.n_auto_captured:
+                    pieces.append(f"[note: {exec_res.n_auto_captured} result dict(s) looked like a "
+                                   f"stats_toolkit result and were auto-added to the report even though "
+                                   f"record_result() wasn't called -- call it explicitly next time to "
+                                   f"control the name shown in the report]")
                 obs = "\n".join(pieces) if pieces else "(executed with no output -- consider adding print() statements)"
             else:
                 obs = f"Error: {exec_res.error}"
@@ -291,12 +386,12 @@ def run_agent(task: str, df: pd.DataFrame, data_profile_str: str, llm_client,
             result.report_sections.append(section)
             obs = "Section recorded."
 
-        messages.append({"role": "user", "content": f"Observation: {obs}"})
+        messages.append(user_msg(f"Observation: {obs}"))
         result.transcript.append({"role": "observation", "content": obs})
         if on_step:
             on_step(i, raw, obs)
 
-    if not result.finished_cleanly:
+    if not result.finished_cleanly and not result.aborted_reason:
         result.finish_message = "(reached max iterations without an explicit finish action)"
 
     return result
