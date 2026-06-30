@@ -72,6 +72,24 @@ def validate_result(result: Dict[str, Any]) -> List[str]:
         warnings.append(f"'{name}': {cv}% of contingency-table cells have expected count < 5 -- "
                          f"the chi-square approximation may not be reliable.")
 
+    if result.get("test") == "classification_test":
+        n_test = result.get("n_test")
+        if isinstance(n_test, int) and n_test < 20:
+            warnings.append(f"'{name}': only {n_test} held-out test rows -- the accuracy estimate has "
+                             f"a wide margin of error at this sample size.")
+        acc, n_classes = result.get("accuracy"), result.get("n_classes")
+        if isinstance(acc, (int, float)) and isinstance(n_classes, int) and n_classes > 0:
+            baseline = 1.0 / n_classes
+            if acc <= baseline + 0.05:
+                warnings.append(f"'{name}': accuracy ({acc}) is barely above the {baseline:.2f} "
+                                 f"baseline for guessing the majority class -- the model may not have "
+                                 f"learned a meaningful pattern.")
+
+    if result.get("test") == "multinomial_logistic_regression":
+        warnings.append(f"'{name}': accuracy/confusion matrix reported here are TRAINING-set fit, not "
+                         f"held-out performance -- treat as a measure of model fit, not predictive "
+                         f"accuracy (see classification_test for that).")
+
     return warnings
 
 

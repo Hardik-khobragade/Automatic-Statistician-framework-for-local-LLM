@@ -173,6 +173,68 @@ def profile_column(series: pd.Series, dtype_label: str) -> Dict[str, Any]:
 # Full profile
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# Target-column / task-type detection
+# --------------------------------------------------------------------------- #
+
+_TARGET_NAME_HINTS = (
+    "target", "label", "class", "outcome", "y", "response", "category",
+    "churn", "default", "diagnosis", "survived", "result", "status",
+    "pass", "fail", "approved", "fraud",
+)
+
+
+def detect_likely_target(df: pd.DataFrame, columns_profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Heuristically guess which column is a classification/regression
+    target, and what kind of test that implies. This exists so the agent
+    doesn't have to spend several ReAct turns reasoning about ambiguous
+    tasks like "do a classification test" before it even knows which
+    column to predict -- a real failure mode observed in practice on
+    benchmark-style datasets (e.g. sklearn's wine.csv, which has a literal
+    `target` column with 3 classes as its last column)."""
+    col_names = list(columns_profile.keys())
+    best_name, best_score = None, 0
+
+    for i, name in enumerate(col_names):
+        info = columns_profile[name]
+        lname = name.lower().strip()
+        score = 0
+        if lname in ("target", "label", "class", "y"):
+            score += 5
+        elif any(h in lname for h in _TARGET_NAME_HINTS):
+            score += 2
+        if info["detected_type"] in ("categorical", "boolean", "ordinal_candidate"):
+            nunique = info.get("n_unique", 0)
+            if 2 <= nunique <= 12:
+                score += 1
+        if i == len(col_names) - 1:  # common convention: target is the last column
+            score += 1
+        if score > best_score:
+            best_score, best_name = score, name
+
+    if best_name is None or best_score < 2:
+        return None  # not confident enough to suggest anything
+
+    info = columns_profile[best_name]
+    n_classes = info.get("n_unique")
+    if info["detected_type"] == "boolean" or (info["detected_type"] in ("categorical", "ordinal_candidate") and n_classes == 2):
+        suggested_task = "binary_classification"
+    elif info["detected_type"] in ("categorical", "ordinal_candidate") and n_classes and n_classes > 2:
+        suggested_task = "multiclass_classification"
+    elif info["detected_type"] == "numeric":
+        suggested_task = "regression"
+    else:
+        suggested_task = None
+
+    return {
+        "likely_target_column": best_name,
+        "target_type": info["detected_type"],
+        "n_classes": n_classes if info["detected_type"] != "numeric" else None,
+        "suggested_task": suggested_task,
+        "confidence": "high" if best_score >= 4 else ("medium" if best_score >= 2 else "low"),
+    }
+
+
 def profile_data(df: pd.DataFrame, max_columns_detailed: int = 60) -> Dict[str, Any]:
     """Build the full profile dict (saved as JSON, and also used to build
     the compact prompt summary for the LLM)."""
@@ -210,6 +272,7 @@ def profile_data(df: pd.DataFrame, max_columns_detailed: int = 60) -> Dict[str, 
         "duplicate_rows": int(df.duplicated().sum()),
         "columns": columns,
         "top_correlations": correlations,
+        "likely_target": detect_likely_target(df, columns),
     }
     return profile
 
@@ -228,6 +291,23 @@ def profile_to_prompt_string(profile: Dict[str, Any], max_cols: int = 25) -> str
     lines.append(f"Rows: {profile['n_rows']}  Columns: {profile['n_cols']}  "
                   f"Missing cells: {profile['total_missing_cells']}  "
                   f"Duplicate rows: {profile['duplicate_rows']}")
+
+    target = profile.get("likely_target")
+    if target and target.get("likely_target_column"):
+        task_hint = {
+            "binary_classification": "use logistic_regression and/or classification_test",
+            "multiclass_classification": "use multinomial_logistic_regression and/or classification_test "
+                                          "-- NOT logistic_regression, which is binary-only",
+            "regression": "use ols_regression",
+        }.get(target.get("suggested_task"), "inspect it with query_data before choosing a test")
+        lines.append("")
+        lines.append(
+            f"LIKELY TARGET COLUMN: '{target['likely_target_column']}' "
+            f"({target['target_type']}, {target.get('n_classes')} classes, "
+            f"confidence={target['confidence']}) -- if the task involves prediction/classification, "
+            f"{task_hint}."
+        )
+
     lines.append("")
     lines.append("Columns (name | type | key stats):")
     cols = list(profile["columns"].items())

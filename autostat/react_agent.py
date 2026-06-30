@@ -41,10 +41,18 @@ assumption checks and effect sizes):
   stats_toolkit.kruskal_wallis(df, value, group)
   stats_toolkit.chi_square_test(df, col1, col2)           # categorical association
   stats_toolkit.ols_regression(df, formula)                # e.g. "y ~ x1 + C(x2)"
-  stats_toolkit.logistic_regression(df, formula)           # binary outcome
+  stats_toolkit.logistic_regression(df, formula)           # BINARY outcome only (2 classes)
+  stats_toolkit.multinomial_logistic_regression(df, formula)  # categorical outcome with 3+ classes; p-values per predictor
+  stats_toolkit.classification_test(df, target, features=None, model="random_forest")  # predictive accuracy (binary OR multi-class); model="random_forest"|"logistic"|"decision_tree"
   stats_toolkit.mixed_effects(df, formula, groups)
   stats_toolkit.cohens_d(series_a, series_b)
   stats_toolkit.cramers_v_from_table(table)
+
+If the dataset profile lists a LIKELY TARGET COLUMN: check its number of
+classes before picking a classification function. logistic_regression
+will reject a target with more than 2 classes -- use
+multinomial_logistic_regression (for p-values/inference) and/or
+classification_test (for a held-out accuracy estimate) instead.
 
 Every one of these returns a dict. To make a result show up in the final
 report's results tables, wrap the call:

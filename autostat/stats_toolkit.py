@@ -370,8 +370,18 @@ def ols_regression(df: pd.DataFrame, formula: str) -> Dict[str, Any]:
 def logistic_regression(df: pd.DataFrame, formula: str) -> Dict[str, Any]:
     """Binary logistic regression via a statsmodels R-style formula,
     e.g. 'passed ~ age + income'. Reports odds ratios and pseudo-R^2,
-    plus a confusion matrix / accuracy at a 0.5 cutoff."""
+    plus a confusion matrix / accuracy at a 0.5 cutoff. For a target with
+    more than 2 classes, use multinomial_logistic_regression() instead."""
     import statsmodels.formula.api as smf
+
+    target_col = formula.split("~")[0].strip()
+    if target_col in df.columns and df[target_col].nunique(dropna=True) > 2:
+        return {
+            "test": "logistic_regression",
+            "error": f"'{target_col}' has {df[target_col].nunique()} classes -- logistic_regression "
+                     f"only supports binary targets. Use multinomial_logistic_regression(df, formula) "
+                     f"or classification_test(df, target='{target_col}') instead.",
+        }
 
     # statsmodels' formula endog parser chokes on bool dtype columns
     # (it tries to one-hot encode them); cast bool -> int first.
@@ -403,6 +413,164 @@ def logistic_regression(df: pd.DataFrame, formula: str) -> Dict[str, Any]:
         "coefficients": coefs,
         "confusion_matrix": {"tp": tp, "tn": tn, "fp": fp, "fn": fn},
         "accuracy": _round(accuracy), "precision": _round(precision), "recall": _round(recall),
+    }
+
+
+def multinomial_logistic_regression(df: pd.DataFrame, formula: str) -> Dict[str, Any]:
+    """Multinomial logistic regression for a categorical target with MORE
+    THAN 2 classes, via a statsmodels R-style formula, e.g.
+    'target ~ alcohol + malic_acid'. Reports coefficients/odds ratios/
+    p-values for each non-reference class vs. a reference class, plus
+    training-set accuracy and a confusion matrix. This gives you
+    statistical inference (which predictors matter, and how much). For a
+    held-out predictive accuracy estimate instead, use classification_test()."""
+    import statsmodels.formula.api as smf
+
+    target_col = formula.split("~")[0].strip()
+    work = df.copy()
+    bool_cols = work.select_dtypes(include="bool").columns
+    work[bool_cols] = work[bool_cols].astype(int)
+    work = work.dropna(subset=[c.strip() for c in [target_col] + formula.split("~")[1].split("+")])
+
+    model = smf.mnlogit(formula=formula, data=work).fit(disp=0, maxiter=200)
+
+    y_raw = work[target_col]
+    categories = sorted(pd.unique(y_raw), key=str)
+    reference, non_ref = categories[0], categories[1:]
+
+    coefs: Dict[str, Any] = {}
+    for col_idx, level in zip(model.params.columns, non_ref):
+        for pred_name in model.params.index:
+            coef = model.params.loc[pred_name, col_idx]
+            p = model.pvalues.loc[pred_name, col_idx]
+            coefs[f"{level} vs {reference}: {pred_name}"] = {
+                "coef": _round(coef), "odds_ratio": _round(math.exp(coef)), "p_value": _round(p, 5),
+            }
+
+    probs = model.predict()
+    probs_arr = probs.values if hasattr(probs, "values") else np.asarray(probs)
+    pred_idx = probs_arr.argmax(axis=1)
+    pred_labels = [categories[i] for i in pred_idx]
+    actual_labels = list(y_raw)
+    n = len(actual_labels)
+    accuracy = sum(p == a for p, a in zip(pred_labels, actual_labels)) / n if n else None
+
+    confusion = {str(a): {str(c): 0 for c in categories} for a in categories}
+    for a, p in zip(actual_labels, pred_labels):
+        confusion[str(a)][str(p)] += 1
+
+    precisions, recalls, f1s = [], [], []
+    for c in categories:
+        tp = confusion[str(c)][str(c)]
+        fp = sum(confusion[str(a)][str(c)] for a in categories if a != c)
+        fn = sum(confusion[str(c)][str(p)] for p in categories if p != c)
+        prec = tp / (tp + fp) if (tp + fp) else 0.0
+        rec = tp / (tp + fn) if (tp + fn) else 0.0
+        precisions.append(prec); recalls.append(rec)
+        f1s.append(2 * prec * rec / (prec + rec) if (prec + rec) else 0.0)
+
+    return {
+        "test": "multinomial_logistic_regression", "formula": formula, "n": int(model.nobs),
+        "classes": [str(c) for c in categories], "reference_class": str(reference),
+        "training_accuracy": _round(accuracy),
+        "macro_precision": _round(sum(precisions) / len(precisions)) if precisions else None,
+        "macro_recall": _round(sum(recalls) / len(recalls)) if recalls else None,
+        "macro_f1": _round(sum(f1s) / len(f1s)) if f1s else None,
+        "coefficients": coefs,
+        "confusion_matrix_training": confusion,
+        "caveat": "Accuracy/confusion matrix here are training-set fit, not held-out predictive "
+                  "performance -- use classification_test() for a train/test-split estimate.",
+    }
+
+
+def classification_test(df: pd.DataFrame, target: str, features: Optional[Sequence[str]] = None,
+                         model: str = "random_forest", test_size: float = 0.25,
+                         random_state: int = 42) -> Dict[str, Any]:
+    """Predictive classification test: trains a classifier on a held-out
+    train/test split and reports test-set accuracy, macro precision/
+    recall/f1, a confusion matrix, and either feature importances
+    (tree-based models) or coefficients (logistic). Works for a binary OR
+    multi-class target, unlike logistic_regression (binary-only). Gives a
+    predictive-accuracy estimate, in contrast to logistic_regression /
+    multinomial_logistic_regression which give statistical inference
+    (p-values per predictor) instead.
+
+    model: "random_forest" (default -- no scaling needed, handles
+    non-linear relationships, gives feature importances) | "logistic" |
+    "decision_tree". features: defaults to all numeric columns except target.
+    """
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import accuracy_score, confusion_matrix, precision_recall_fscore_support
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.tree import DecisionTreeClassifier
+
+    if target not in df.columns:
+        return {"test": "classification_test", "error": f"target column '{target}' not found"}
+    if features is None:
+        features = [c for c in df.select_dtypes(include=[np.number]).columns if c != target]
+    features = list(features)
+    if not features:
+        return {"test": "classification_test", "error": "no usable numeric feature columns found"}
+
+    work = df[[target] + features].copy()
+    work[features] = work[features].apply(pd.to_numeric, errors="coerce")
+    work = work.dropna()
+    if work.empty:
+        return {"test": "classification_test", "error": "no complete rows after dropping missing values"}
+
+    X, y = work[features], work[target]
+    can_stratify = y.nunique() > 1 and y.value_counts().min() >= 2
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state, stratify=y if can_stratify else None)
+    except ValueError:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state)
+
+    if model == "logistic":
+        scaler = StandardScaler()
+        X_train_s, X_test_s = scaler.fit_transform(X_train), scaler.transform(X_test)
+        clf = LogisticRegression(max_iter=1000)
+        clf.fit(X_train_s, y_train)
+        y_pred = clf.predict(X_test_s)
+        importance_label = "coefficients"
+        if clf.coef_.shape[0] == 1:
+            importances = {f: _round(c) for f, c in zip(features, clf.coef_[0])}
+        else:
+            importances = {
+                str(cls): {f: _round(c) for f, c in zip(features, row)}
+                for cls, row in zip(clf.classes_, clf.coef_)
+            }
+    elif model == "decision_tree":
+        clf = DecisionTreeClassifier(random_state=random_state, max_depth=5)
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+        importance_label = "feature_importances"
+        importances = {f: _round(c) for f, c in zip(features, clf.feature_importances_)}
+    else:
+        clf = RandomForestClassifier(n_estimators=200, random_state=random_state)
+        clf.fit(X_train, y_train)
+        y_pred = clf.predict(X_test)
+        importance_label = "feature_importances"
+        importances = {f: _round(c) for f, c in zip(features, clf.feature_importances_)}
+
+    acc = accuracy_score(y_test, y_pred)
+    precision, recall, f1, _ = precision_recall_fscore_support(y_test, y_pred, average="macro", zero_division=0)
+    labels_sorted = sorted(y.unique(), key=str)
+    cm = confusion_matrix(y_test, y_pred, labels=labels_sorted)
+    confusion = {str(a): {str(p): int(cm[i, j]) for j, p in enumerate(labels_sorted)}
+                 for i, a in enumerate(labels_sorted)}
+
+    return {
+        "test": "classification_test", "model": model, "target": target,
+        "features_used": features, "n_train": int(len(X_train)), "n_test": int(len(X_test)),
+        "n_classes": int(y.nunique()),
+        "accuracy": _round(acc), "macro_precision": _round(precision),
+        "macro_recall": _round(recall), "macro_f1": _round(f1),
+        "confusion_matrix_test": confusion,
+        importance_label: importances,
     }
 
 

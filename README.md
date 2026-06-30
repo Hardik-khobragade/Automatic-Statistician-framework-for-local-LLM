@@ -200,6 +200,31 @@ If you still get an empty report:
      ReAct template far more reliably *and* run faster, since there's no
      reasoning overhead to suppress in the first place.
 
+## Classification support
+
+As of v2.1.0, Layer 1 tries to guess a likely prediction target in the data
+profile (column named `target`/`label`/`class`/etc., or a low-cardinality
+categorical column, with a bonus if it's the last column -- the convention
+used by sklearn's toy datasets like `wine.csv`) and surfaces it directly in
+the prompt: `LIKELY TARGET COLUMN: 'target' (3 classes, confidence=high) --
+use multinomial_logistic_regression and/or classification_test`. This saves
+the agent several turns of reasoning about which column/test to use on
+ambiguous tasks like "do a classification test."
+
+Three classification-relevant toolkit functions, each suited to a different
+question:
+
+| Function | Question it answers | Output |
+|---|---|---|
+| `logistic_regression(df, formula)` | Which predictors matter, for a **binary** outcome? | p-values, odds ratios (rejects >2-class targets with a clear error pointing elsewhere) |
+| `multinomial_logistic_regression(df, formula)` | Which predictors matter, for a **3+ class** outcome? | p-values/odds ratios per class vs. a reference class |
+| `classification_test(df, target, features=None, model="random_forest")` | How accurately can this be predicted at all? | held-out accuracy, macro precision/recall/f1, confusion matrix, feature importances. Works for binary or multi-class. `model` can also be `"logistic"` or `"decision_tree"`. |
+
+`multinomial_logistic_regression`'s accuracy/confusion matrix are
+training-set fit (a model-fit measure), not a held-out predictive estimate
+-- `classification_test` does the actual train/test split for that, and
+Layer 5 validation flags this distinction automatically in the report.
+
 ## Extending the toolkit
 
 Add a new wrapper function to `autostat/stats_toolkit.py` (return a plain

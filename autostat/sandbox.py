@@ -37,7 +37,7 @@ import cloudpickle
 # --------------------------------------------------------------------------- #
 
 ALLOWED_TOP_LEVEL_MODULES = {
-    "pandas", "numpy", "scipy", "statsmodels", "pingouin",
+    "pandas", "numpy", "scipy", "statsmodels", "pingouin", "sklearn",
     "matplotlib", "seaborn", "math", "statistics", "itertools",
     "collections", "re", "json", "warnings", "stats_toolkit",
 }
