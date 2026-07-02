@@ -38,7 +38,6 @@ def parse_args():
     p.add_argument("--output-dir", default=None,
                    help="Working directory for figures/transcript/profile (default: alongside --output)")
     p.add_argument("--model", default=None, help="Model name as known to your local server (default: qwen3:4b)")
-    p.add_argument("--base-url", default=None, help="OpenAI-compatible base URL (default: http://localhost:11434/v1)")
     p.add_argument("--max-iterations", type=int, default=None, help="Max ReAct loop iterations (default: 20)")
     p.add_argument("--sandbox-timeout", type=int, default=None, help="Per-step sandbox timeout in seconds (default: 60)")
     p.add_argument("--ground-truth", default=None,
@@ -61,9 +60,7 @@ def main():
     llm_cfg = LLMConfig()
     if args.model:
         llm_cfg.model = args.model
-    if args.base_url:
-        llm_cfg.base_url = args.base_url
-
+    
     agent_cfg = AgentConfig()
     if args.max_iterations:
         agent_cfg.max_iterations = args.max_iterations
@@ -93,14 +90,11 @@ def main():
     print(f"      {profile['n_rows']} rows x {profile['n_cols']} columns "
           f"({profile['total_missing_cells']} missing cells)")
 
-    print(f"[2/5] Connecting to local LLM server at {llm_cfg.base_url} (model='{llm_cfg.model}') ...")
+    print(f"[2/5] Connecting to Groq API (model='{llm_cfg.model}') ...")
     try:
         llm_client = LLMClient(llm_cfg)
-        if not llm_client.ping():
-            print("      Warning: could not verify the server is reachable; will attempt the run anyway.")
-    except LLMConnectionError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        print("Run `python setup_check.py` for connection troubleshooting.", file=sys.stderr)
+    except Exception as e:
+        print(f"Error: {e}")
         sys.exit(1)
 
     sandbox = CodeSandbox(state_path=paths.state_path, figures_dir=paths.figures_dir,
